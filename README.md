@@ -11,6 +11,8 @@ Live: [https://yogesh2850.github.io/license_practice/](https://yogesh2850.github
 - Questions appear **6 per page**. Each page shows how many you got right and wrong before you continue.
 - Submit a page to see that page’s score, then continue.
 - Passing target is **30 / 36**, matching the usual adult Class C knowledge test.
-- Finished tests are saved in the browser. Open **My scores** for overall average, pass rate, weakest topics, coverage, and every attempt.
+- Enter your **name** first so scores, unfinished tests, and missed questions stay attached to you. If that name already has history, the site welcomes you back.
+- If you leave a test unfinished, **Continue** picks up the same remaining questions. **Restart this test** starts that same 36-question set over from page 1 instead of throwing the rest away.
+- Wrong answers are kept on **Missed questions** so you can read the correct answer later or practice just those items.
 
 Add more questions in `questions.js` (or `scripts/build_extra_questions.py`), and extra tests in `window.TESTS`. Scores stay grouped by test name.

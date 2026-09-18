@@ -114,6 +114,12 @@ body {
   padding: 0.4rem 0.85rem;
 }
 
+.top-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
 .section-title {
   font-family: "Source Serif 4", Georgia, serif;
   font-size: 2rem;
@@ -194,6 +200,60 @@ h1 {
   color: var(--muted);
   margin: 0 0 1.25rem;
   font-size: 0.98rem;
+}
+
+.name-form {
+  margin: 0 0 1.25rem;
+  padding: 1rem;
+  background: var(--card-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.name-form label {
+  display: block;
+  font-weight: 700;
+  margin-bottom: 0.45rem;
+}
+
+.name-row {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.name-row input {
+  flex: 1 1 180px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 0.7rem 1rem;
+  font: inherit;
+}
+
+.name-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+
+.unfinished {
+  margin: 0 0 1.25rem;
+  padding: 1rem;
+  border-radius: 14px;
+  border: 1px solid rgba(243, 196, 83, 0.35);
+  background: rgba(243, 196, 83, 0.08);
+}
+
+.unfinished p {
+  margin: 0;
+}
+
+.unfinished .actions {
+  margin-top: 0.75rem;
 }
 
 .stats {

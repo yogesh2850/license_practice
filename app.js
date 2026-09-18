@@ -1,6 +1,7 @@
 const QUESTIONS_PER_PAGE = 6;
-const STORAGE_KEY = "license_practice_history_v1";
-const COVERAGE_KEY = "license_practice_coverage_v1";
+const PROFILE_KEY = "license_practice_profiles_v1";
+const LEGACY_HISTORY_KEY = "license_practice_history_v1";
+const LEGACY_COVERAGE_KEY = "license_practice_coverage_v1";
 
 const state = {
   view: "home",
@@ -12,6 +13,8 @@ const state = {
   startedAt: null,
   savedAttemptId: null,
   selectedAttemptId: null,
+  mode: "test",
+  nameError: "",
 };
 
 function tests() {
@@ -47,18 +50,114 @@ function shuffle(list) {
   return items;
 }
 
-function loadHistory() {
+function nameKey(name) {
+  return String(name ?? "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function emptyProfile(displayName) {
+  return {
+    name: displayName,
+    attempts: [],
+    coverage: { byTest: {} },
+    missed: {},
+    inProgress: null,
+  };
+}
+
+function loadStore() {
   try {
-    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "");
-    if (parsed && Array.isArray(parsed.attempts)) return parsed;
+    const parsed = JSON.parse(localStorage.getItem(PROFILE_KEY) ?? "");
+    if (parsed && parsed.profiles && typeof parsed.profiles === "object") return parsed;
   } catch {
-    // Ignore malformed local data and start a fresh history.
+    // Ignore malformed profile data.
   }
-  return { attempts: [] };
+  return { currentKey: "", profiles: {} };
+}
+
+function saveStore(store) {
+  localStorage.setItem(PROFILE_KEY, JSON.stringify(store));
+}
+
+function migrateLegacyInto(profile) {
+  try {
+    const history = JSON.parse(localStorage.getItem(LEGACY_HISTORY_KEY) ?? "");
+    if (history && Array.isArray(history.attempts) && history.attempts.length && !profile.attempts.length) {
+      profile.attempts = history.attempts;
+    }
+  } catch {
+    // Ignore legacy history.
+  }
+  try {
+    const coverage = JSON.parse(localStorage.getItem(LEGACY_COVERAGE_KEY) ?? "");
+    if (coverage && coverage.byTest && !Object.keys(profile.coverage.byTest).length) {
+      profile.coverage = coverage;
+    }
+  } catch {
+    // Ignore legacy coverage.
+  }
+}
+
+function currentProfile() {
+  const store = loadStore();
+  if (!store.currentKey || !store.profiles[store.currentKey]) return null;
+  return store.profiles[store.currentKey];
+}
+
+function currentDisplayName() {
+  return currentProfile()?.name ?? "";
+}
+
+function knownProfiles() {
+  const store = loadStore();
+  return Object.entries(store.profiles).map(([key, profile]) => ({
+    key,
+    name: profile.name,
+    attempts: profile.attempts?.length ?? 0,
+  }));
+}
+
+function setCurrentName(rawName) {
+  const displayName = String(rawName ?? "").trim().replace(/\s+/g, " ");
+  const key = nameKey(displayName);
+  if (!key) {
+    state.nameError = "Enter your name so we can save your tests.";
+    return false;
+  }
+  const store = loadStore();
+  const existed = Boolean(store.profiles[key]);
+  if (!store.profiles[key]) {
+    store.profiles[key] = emptyProfile(displayName);
+    migrateLegacyInto(store.profiles[key]);
+  } else {
+    store.profiles[key].name = displayName;
+  }
+  store.currentKey = key;
+  saveStore(store);
+  state.nameError = "";
+  restoreInProgress();
+  return { existed, name: displayName };
+}
+
+function withProfile(mutator) {
+  const store = loadStore();
+  const key = store.currentKey;
+  if (!key || !store.profiles[key]) return null;
+  const result = mutator(store.profiles[key], store);
+  saveStore(store);
+  return result;
+}
+
+function loadHistory() {
+  return { attempts: currentProfile()?.attempts ?? [] };
 }
 
 function saveHistory(history) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(history));
+  withProfile((profile) => {
+    profile.attempts = history.attempts;
+  });
 }
 
 function saveAttempt(attempt) {
@@ -69,17 +168,112 @@ function saveAttempt(attempt) {
 }
 
 function loadCoverageMap() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(COVERAGE_KEY) ?? "");
-    if (parsed && parsed.byTest && typeof parsed.byTest === "object") return parsed;
-  } catch {
-    // Ignore malformed coverage data.
-  }
-  return { byTest: {} };
+  return currentProfile()?.coverage ?? { byTest: {} };
 }
 
 function saveCoverageMap(map) {
-  localStorage.setItem(COVERAGE_KEY, JSON.stringify(map));
+  withProfile((profile) => {
+    profile.coverage = map;
+  });
+}
+
+function missedList() {
+  return Object.values(currentProfile()?.missed ?? {}).sort((a, b) =>
+    String(b.lastMissedAt ?? "").localeCompare(String(a.lastMissedAt ?? "")),
+  );
+}
+
+function rememberMissed(results) {
+  withProfile((profile) => {
+    profile.missed = profile.missed ?? {};
+    for (const result of results ?? []) {
+      if (!result.correct) {
+        const previous = profile.missed[result.id] ?? { timesMissed: 0 };
+        profile.missed[result.id] = {
+          id: result.id,
+          prompt: result.prompt,
+          topic: result.topic,
+          answer: result.answer,
+          selected: result.selected,
+          lastMissedAt: new Date().toISOString(),
+          timesMissed: (previous.timesMissed ?? 0) + 1,
+        };
+      } else if (profile.missed[result.id]) {
+        delete profile.missed[result.id];
+      }
+    }
+  });
+}
+
+function dismissMissed(questionId) {
+  withProfile((profile) => {
+    if (profile.missed) delete profile.missed[questionId];
+  });
+}
+
+function persistInProgress() {
+  if (!testInProgress()) {
+    withProfile((profile) => {
+      profile.inProgress = null;
+    });
+    return;
+  }
+  withProfile((profile) => {
+    profile.inProgress = {
+      mode: state.mode,
+      test: state.test,
+      questions: state.questions,
+      page: state.page,
+      answers: state.answers,
+      gradedPages: state.gradedPages,
+      startedAt: state.startedAt,
+    };
+  });
+}
+
+function clearInProgress() {
+  withProfile((profile) => {
+    profile.inProgress = null;
+  });
+}
+
+function restoreInProgress() {
+  const saved = currentProfile()?.inProgress;
+  if (!saved?.questions?.length) {
+    state.questions = [];
+    state.test = null;
+    state.page = 0;
+    state.answers = {};
+    state.gradedPages = {};
+    state.startedAt = null;
+    state.savedAttemptId = null;
+    state.mode = "test";
+    return false;
+  }
+  state.mode = saved.mode ?? "test";
+  state.test = saved.test;
+  state.questions = saved.questions;
+  state.page = saved.page ?? 0;
+  state.answers = Object.fromEntries(
+    Object.entries(saved.answers ?? {}).map(([id, value]) => [Number(id), value]),
+  );
+  state.gradedPages = saved.gradedPages ?? {};
+  state.startedAt = saved.startedAt;
+  state.savedAttemptId = null;
+  return true;
+}
+
+function unfinishedSummary() {
+  if (!testInProgress()) return null;
+  const answered = Object.keys(state.answers).length;
+  return {
+    name: state.test?.name ?? "Practice test",
+    page: state.page + 1,
+    pages: pageCount(),
+    remaining: Math.max(0, state.questions.length - answered),
+    total: state.questions.length,
+    review: state.mode === "review",
+  };
 }
 
 function coverageFor(testId, bank) {
@@ -144,12 +338,46 @@ function markCovered(testId, bank, questionIds) {
   saveCoverageMap(map);
 }
 
-function startTest(testId) {
+function requireName() {
+  if (currentDisplayName()) return true;
+  state.nameError = "Enter your name first so we can save this test to you.";
+  state.view = "home";
+  render();
+  return false;
+}
+
+function beginQuestionSet(test, questions, mode) {
+  state.test = test;
+  state.questions = questions;
+  state.mode = mode;
+  state.page = 0;
+  state.answers = {};
+  state.gradedPages = {};
+  state.startedAt = new Date().toISOString();
+  state.savedAttemptId = null;
+  state.view = "test";
+  persistInProgress();
+  render();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function startTest(testId, { forceNew = false } = {}) {
+  if (!requireName()) return;
+  if (testInProgress() && !forceNew) {
+    state.view = "home";
+    render();
+    return;
+  }
+  if (testInProgress() && forceNew) {
+    const replace = window.confirm(
+      "Start a new shuffled test? This replaces your unfinished test. To keep those remaining questions, tap Continue or Restart this test instead.",
+    );
+    if (!replace) return;
+  }
   const test = getTest(testId);
   const length = test.length ?? 36;
   const bank = questionsForTest(test);
-  state.test = test;
-  state.questions = pickCoveringQuestions(bank, length, test.id).map((question) => {
+  const questions = pickCoveringQuestions(bank, length, test.id).map((question) => {
     const choices = question.choices.map((text, index) => ({
       text,
       correct: index === question.answer,
@@ -161,13 +389,63 @@ function startTest(testId) {
       choices: shuffle(choices),
     };
   });
+  beginQuestionSet(test, questions, "test");
+}
+
+function resumeTest() {
+  if (!restoreInProgress() && !testInProgress()) return;
+  state.view = "test";
+  render();
+}
+
+function restartUnfinishedTest() {
+  if (!testInProgress() && !restoreInProgress()) return;
   state.page = 0;
   state.answers = {};
   state.gradedPages = {};
   state.startedAt = new Date().toISOString();
   state.savedAttemptId = null;
   state.view = "test";
+  persistInProgress();
   render();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function startMissedReview() {
+  if (!requireName()) return;
+  if (testInProgress() && state.mode !== "review") {
+    state.view = "home";
+    render();
+    return;
+  }
+  const missed = missedList();
+  const byId = new Map(window.QUESTION_BANK.map((question) => [question.id, question]));
+  const questions = missed
+    .map((item) => byId.get(Number(item.id)))
+    .filter(Boolean)
+    .slice(0, 36)
+    .map((question) => {
+      const choices = question.choices.map((text, index) => ({
+        text,
+        correct: index === question.answer,
+      }));
+      return {
+        id: question.id,
+        prompt: question.prompt,
+        topic: question.topic,
+        choices: shuffle(choices),
+      };
+    });
+  if (!questions.length) {
+    state.view = "missed";
+    render();
+    return;
+  }
+  beginQuestionSet(
+    { id: "missed-review", name: "Missed questions review", length: questions.length, passScore: Math.ceil(questions.length * 0.83) },
+    questions,
+    "review",
+  );
 }
 
 function pageCount() {
@@ -208,9 +486,22 @@ function passScore() {
   return state.test?.passScore ?? 30;
 }
 
+function pageResults(questions) {
+  return questions.map((question) => ({
+    id: question.id,
+    topic: question.topic,
+    correct: scoreQuestion(question),
+    prompt: question.prompt,
+    selected: question.choices[state.answers[question.id]]?.text ?? "",
+    answer: question.choices.find((choice) => choice.correct)?.text ?? "",
+  }));
+}
+
 function gradePage() {
   if (!pageFullyAnswered()) return;
   state.gradedPages[state.page] = true;
+  rememberMissed(pageResults(pageQuestions()));
+  persistInProgress();
   render();
 }
 
@@ -223,6 +514,7 @@ function finishTest() {
   const total = state.questions.length;
   const attempt = {
     id: crypto.randomUUID(),
+    name: currentDisplayName(),
     testId: state.test?.id ?? "class-c-1",
     testName: state.test?.name ?? "Class C Practice Test 1",
     startedAt: state.startedAt,
@@ -231,19 +523,16 @@ function finishTest() {
     total,
     passed: score >= passScore(),
     percent: total ? Math.round((score / total) * 100) : 0,
-    results: state.questions.map((question) => ({
-      id: question.id,
-      topic: question.topic,
-      correct: scoreQuestion(question),
-      prompt: question.prompt,
-      selected: question.choices[state.answers[question.id]]?.text ?? "",
-      answer: question.choices.find((choice) => choice.correct)?.text ?? "",
-    })),
+    results: pageResults(state.questions),
   };
   saveAttempt(attempt);
-  const testId = attempt.testId;
-  markCovered(testId, questionsForTest(getTest(testId)), state.questions.map((question) => question.id));
+  rememberMissed(attempt.results);
+  if (state.mode !== "review") {
+    const testId = attempt.testId;
+    markCovered(testId, questionsForTest(getTest(testId)), state.questions.map((question) => question.id));
+  }
   state.savedAttemptId = attempt.id;
+  clearInProgress();
   state.view = "results";
 }
 
@@ -253,6 +542,7 @@ function nextPage() {
   } else {
     state.page += 1;
   }
+  persistInProgress();
   render();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
@@ -260,6 +550,7 @@ function nextPage() {
 function selectAnswer(questionId, choiceIndex) {
   if (state.gradedPages[state.page]) return;
   state.answers[questionId] = choiceIndex;
+  persistInProgress();
   const btn = document.getElementById("grade-btn");
   const hint = document.querySelector(".hint");
   if (btn) btn.disabled = !pageFullyAnswered();
@@ -276,6 +567,22 @@ function testInProgress() {
 
 function goHome() {
   state.view = "home";
+  render();
+}
+
+function goMissed() {
+  state.view = "missed";
+  render();
+}
+
+function saveNameFromForm() {
+  const input = document.getElementById("name-input");
+  const result = setCurrentName(input?.value ?? "");
+  if (!result) {
+    render();
+    document.getElementById("name-input")?.focus();
+    return;
+  }
   render();
 }
 
@@ -371,8 +678,60 @@ function summarizeHistory(attempts) {
 
 function recentScoreBlurb() {
   const latest = loadHistory().attempts[0];
-  if (!latest) return "";
-  return `<p class="lede">Last attempt: <strong>${latest.score} / ${latest.total}</strong> (${latest.percent}%) on ${escapeHtml(latest.testName)} — ${latest.passed ? "pass" : "did not pass"}.</p>`;
+  const name = currentDisplayName();
+  const missedCount = missedList().length;
+  if (!name) return "";
+  if (!latest) {
+    const extras = [];
+    if (missedCount) extras.push(`${missedCount} missed question${missedCount === 1 ? "" : "s"} saved`);
+    if (unfinishedSummary()) extras.push("an unfinished test waiting");
+    return `<p class="lede">Welcome${extras.length ? " back" : ""}, <strong>${escapeHtml(name)}</strong>. ${extras.length ? `We still have ${extras.join(" and ")} for you.` : "No completed tests yet."}</p>`;
+  }
+  return `<p class="lede">Welcome back, <strong>${escapeHtml(name)}</strong>. You've taken this test before. Last attempt: <strong>${latest.score} / ${latest.total}</strong> (${latest.percent}%) on ${escapeHtml(latest.testName)} — ${latest.passed ? "pass" : "did not pass"}${missedCount ? `. ${missedCount} missed question${missedCount === 1 ? "" : "s"} saved for review` : ""}.</p>`;
+}
+
+function renderNameForm() {
+  const name = currentDisplayName();
+  const others = knownProfiles().filter((profile) => nameKey(profile.name) !== nameKey(name));
+  const otherMarkup = others.length
+    ? `<p class="hint">Switch to someone who already tested:</p>
+       <div class="name-chips">${others
+         .map(
+           (profile) =>
+             `<button type="button" class="ghost" data-switch-name="${escapeHtml(profile.name)}">${escapeHtml(profile.name)} (${profile.attempts})</button>`,
+         )
+         .join("")}</div>`
+    : "";
+  return `
+    <form class="name-form" id="name-form">
+      <label for="name-input">Your name</label>
+      <div class="name-row">
+        <input id="name-input" name="name" autocomplete="name" placeholder="e.g. Alex" value="${escapeHtml(name)}" />
+        <button class="primary" type="submit">${name ? "Update" : "Save name"}</button>
+      </div>
+      ${state.nameError ? `<p class="feedback bad">${escapeHtml(state.nameError)}</p>` : ""}
+      ${
+        name
+          ? `<p class="hint">We'll keep your unfinished tests, scores, and missed questions under this name.</p>`
+          : `<p class="hint">Enter your name so we can tell if you have taken this test before.</p>`
+      }
+      ${otherMarkup}
+    </form>
+  `;
+}
+
+function renderUnfinishedBanner() {
+  const unfinished = unfinishedSummary();
+  if (!unfinished) return "";
+  return `
+    <div class="unfinished">
+      <p><strong>Unfinished ${unfinished.review ? "review" : "test"} saved</strong> — ${escapeHtml(unfinished.name)}. Page ${unfinished.page} of ${unfinished.pages}. ${unfinished.remaining} question${unfinished.remaining === 1 ? "" : "s"} still remaining.</p>
+      <div class="actions">
+        <button class="primary" id="resume-btn" type="button">Continue</button>
+        <button class="ghost" id="restart-unfinished" type="button">Restart this test</button>
+      </div>
+    </div>
+  `;
 }
 
 function renderHome() {
@@ -398,7 +757,7 @@ function renderHome() {
             <p>${escapeHtml(test.description ?? "36 shuffled questions, 6 per page.")}</p>
             <p class="hint">${escapeHtml(latestLabel)}. ${escapeHtml(coverageLabel)}.</p>
           </div>
-          <button class="primary" data-start-test="${test.id}">Start test</button>
+          <button class="primary" data-start-test="${test.id}" ${currentDisplayName() ? "" : "disabled"} ${unfinishedSummary() ? "data-start-new=1" : ""}>${unfinishedSummary() ? "Start new test" : "Start test"}</button>
         </article>
       `;
     })
@@ -411,8 +770,10 @@ function renderHome() {
         <h2 class="section-title">Practice Questions</h2>
         <div class="panel">
           <h2>Class C knowledge practice</h2>
+          ${renderNameForm()}
           <p class="lede">Each test uses 36 shuffled questions from a ${bankSize}-question bank, 6 per page. After you submit a page you see how many you got right and wrong, then continue. Unseen questions are drawn first so the whole set is covered before questions repeat.</p>
           ${recentScoreBlurb()}
+          ${renderUnfinishedBanner()}
           <div class="stats">
             <div class="stat"><b>36</b><span>questions per test</span></div>
             <div class="stat"><b>6</b><span>questions per page</span></div>
@@ -421,7 +782,7 @@ function renderHome() {
           <div class="test-list">${testCards}</div>
           <div class="actions">
             <button class="ghost js-scores" type="button">View my scores</button>
-            ${testInProgress() ? `<button class="ghost" id="resume-btn">Resume current test</button>` : ""}
+            <button class="ghost js-missed" type="button">Missed questions (${missedList().length})</button>
           </div>
         </div>
       </div>
@@ -515,6 +876,7 @@ function renderTest() {
           ${scoreBox}
           <div class="actions">
             ${action}
+            ${testInProgress() ? `<button class="ghost" id="restart-unfinished" type="button">Restart this test</button>` : ""}
             ${hint}
           </div>
       </div>
@@ -566,6 +928,7 @@ function renderResults() {
           </div>
           <div class="actions">
             <button class="primary" data-start-test="${state.test?.id ?? "class-c-1"}">Take another shuffled test</button>
+            <button class="ghost js-missed" type="button">Review missed questions</button>
             <button class="ghost js-scores" type="button">View all scores</button>
           </div>
         </div>
@@ -668,7 +1031,7 @@ function renderScores() {
     <section>
       <h2 class="section-title">My scores</h2>
       <div class="panel">
-        <p class="lede">All completed tests on this browser are saved. Each new test prefers questions you have not seen yet so the full bank gets covered.</p>
+        <p class="lede">${currentDisplayName() ? `Scores for <strong>${escapeHtml(currentDisplayName())}</strong>. ` : ""}All completed tests on this browser are saved. Each new test prefers questions you have not seen yet so the full bank gets covered.</p>
         <div class="stats stats-4">
           <div class="stat"><b>${summary.totalAttempts}</b><span>tests taken</span></div>
           <div class="stat"><b>${summary.average}%</b><span>overall score</span></div>
@@ -714,6 +1077,7 @@ function renderScores() {
         </div>
         <div class="actions">
           <button class="primary js-home" type="button">Back to tests</button>
+          <button class="ghost js-missed" type="button">Missed questions</button>
           <button class="ghost" id="clear-history">Clear history</button>
         </div>
       </div>
@@ -761,6 +1125,51 @@ function renderAttempt() {
   `;
 }
 
+function renderMissed() {
+  const missed = missedList();
+  if (!missed.length) {
+    return `
+      <section>
+        <h2 class="section-title">Missed questions</h2>
+        <div class="panel">
+          <p class="lede">${currentDisplayName() ? `${escapeHtml(currentDisplayName())}, y` : "Y"}ou don't have any saved missed questions yet. Wrong answers from a finished test will appear here so you can read them or try them again.</p>
+          <div class="actions">
+            <button class="primary js-home" type="button">Back to tests</button>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+  const items = missed
+    .map(
+      (item) => `
+        <article class="missed-item">
+          <p class="hint">${escapeHtml(item.topic ?? "")} · missed ${item.timesMissed ?? 1} time${(item.timesMissed ?? 1) === 1 ? "" : "s"}</p>
+          <p><strong>${escapeHtml(item.prompt)}</strong></p>
+          <p>Your last answer: ${escapeHtml(item.selected || "No answer")}</p>
+          <p>Correct answer: ${escapeHtml(item.answer)}</p>
+          <button class="linkish" data-dismiss-missed="${item.id}" type="button">Remove from list</button>
+        </article>
+      `,
+    )
+    .join("");
+  return `
+    <section>
+      <h2 class="section-title">Missed questions</h2>
+      <div class="panel">
+        <p class="lede">${currentDisplayName() ? `Saved for <strong>${escapeHtml(currentDisplayName())}</strong>. ` : ""}Read the correct answers, or practice just these questions. Getting one right later removes it from this list.</p>
+        <div class="actions">
+          <button class="primary" id="practice-missed" type="button">Practice missed questions</button>
+        </div>
+        <div class="missed">${items}</div>
+        <div class="actions">
+          <button class="ghost js-home" type="button">Back to tests</button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
 function illustration() {
   return `
     <svg viewBox="0 0 280 250" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -779,11 +1188,14 @@ function illustration() {
 
 function render() {
   const root = document.getElementById("app");
+  const who = document.getElementById("whoami");
+  if (who) who.textContent = currentDisplayName() || "Class C";
   if (state.view === "home") root.innerHTML = renderHome();
   if (state.view === "test") root.innerHTML = renderTest();
   if (state.view === "results") root.innerHTML = renderResults();
   if (state.view === "scores") root.innerHTML = renderScores();
   if (state.view === "attempt") root.innerHTML = renderAttempt();
+  if (state.view === "missed") root.innerHTML = renderMissed();
 }
 
 document.addEventListener("click", (event) => {
@@ -799,18 +1211,48 @@ document.addEventListener("click", (event) => {
     goScores();
     return;
   }
+  if (target.closest(".js-missed")) {
+    event.preventDefault();
+    goMissed();
+    return;
+  }
   if (target.id === "resume-btn") {
-    state.view = "test";
-    render();
+    resumeTest();
+    return;
+  }
+  if (target.id === "restart-unfinished") {
+    restartUnfinishedTest();
+    return;
+  }
+  if (target.id === "practice-missed") {
+    startMissedReview();
     return;
   }
   if (target.id === "grade-btn") gradePage();
   if (target.id === "next-btn") nextPage();
   if (target.id === "clear-history") clearHistory();
+  const switchName = target.getAttribute("data-switch-name");
+  if (switchName) {
+    setCurrentName(switchName);
+    render();
+    return;
+  }
   const startId = target.getAttribute("data-start-test");
-  if (startId) startTest(startId);
+  if (startId) startTest(startId, { forceNew: target.hasAttribute("data-start-new") });
   const attemptId = target.getAttribute("data-view-attempt");
   if (attemptId) showAttempt(attemptId);
+  const dismissId = target.getAttribute("data-dismiss-missed");
+  if (dismissId) {
+    dismissMissed(Number(dismissId));
+    render();
+  }
+});
+
+document.addEventListener("submit", (event) => {
+  const form = event.target;
+  if (!(form instanceof HTMLFormElement) || form.id !== "name-form") return;
+  event.preventDefault();
+  saveNameFromForm();
 });
 
 document.addEventListener("change", (event) => {
@@ -820,4 +1262,5 @@ document.addEventListener("change", (event) => {
   selectAnswer(questionId, Number(target.value));
 });
 
+restoreInProgress();
 render();
