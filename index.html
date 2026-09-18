@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>California Driver License Practice Test</title>
+    <meta
+      name="description"
+      content="Unofficial California Class C knowledge test practice: 36 shuffled questions, 5 per page, scored like the DMV sample tests."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Oswald:wght@600;700&family=Source+Sans+3:wght@400;600;700&family=Source+Serif+4:opsz,wght@8..60,500;8..60,600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="./">
+        <svg class="brand-mark" viewBox="0 0 48 48" aria-hidden="true">
+          <circle cx="24" cy="24" r="24" fill="#f4c542" />
+          <path d="M10 28c8-14 20-14 28 0" stroke="#1b2a4a" stroke-width="3" fill="none" />
+          <circle cx="24" cy="20" r="5" fill="#1b2a4a" />
+        </svg>
+        <span class="brand-copy">
+          <strong>CA PRACTICE</strong>
+          <span>Driver License Knowledge Test</span>
+        </span>
+      </a>
+    </header>
+    <div class="nav">
+      <span>Practice Tests</span>
+      <span>Class C</span>
+      <span>Shuffled 36-question exam</span>
+    </div>
+    <main class="wrap">
+      <div class="crumbs">
+        <span>Home</span>
+        <span>Driver Education</span>
+        <span>Sample Knowledge Tests</span>
+        <span>Class C Practice</span>
+      </div>
+      <h1>Sample Driver License<br />Knowledge Test</h1>
+      <div id="app"></div>
+    </main>
+    <footer>
+      Unofficial study aid. Questions are written for California Driver Handbook topics and are not an official DMV test.
+      The official Class C knowledge test is generally 36 questions, with 30 correct answers needed to pass.
+    </footer>
+    <script src="./questions.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>
