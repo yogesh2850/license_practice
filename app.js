@@ -1,5 +1,6 @@
 const QUESTIONS_PER_PAGE = 5;
 const STORAGE_KEY = "license_practice_history_v1";
+const COVERAGE_KEY = "license_practice_coverage_v1";
 
 const state = {
   view: "home",
@@ -67,24 +68,99 @@ function saveAttempt(attempt) {
   return attempt;
 }
 
+function loadCoverageMap() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(COVERAGE_KEY) ?? "");
+    if (parsed && parsed.byTest && typeof parsed.byTest === "object") return parsed;
+  } catch {
+    // Ignore malformed coverage data.
+  }
+  return { byTest: {} };
+}
+
+function saveCoverageMap(map) {
+  localStorage.setItem(COVERAGE_KEY, JSON.stringify(map));
+}
+
+function coverageFor(testId, bank) {
+  const map = loadCoverageMap();
+  const bankIds = new Set(bank.map((question) => question.id));
+  let entry = map.byTest[testId];
+  if (!entry) {
+    const seen = new Set();
+    for (const attempt of loadHistory().attempts.filter((item) => item.testId === testId)) {
+      for (const result of attempt.results ?? []) seen.add(result.id);
+    }
+    entry = { seenIds: [...seen].filter((id) => bankIds.has(id)), cycles: 0 };
+  }
+  entry.seenIds = (entry.seenIds ?? []).filter((id) => bankIds.has(id));
+  map.byTest[testId] = entry;
+  saveCoverageMap(map);
+  return entry;
+}
+
+function coverageStats(testId, bank) {
+  const entry = coverageFor(testId, bank);
+  const total = bank.length;
+  const seen = entry.seenIds.length;
+  return {
+    seen,
+    total,
+    remaining: Math.max(0, total - seen),
+    cycles: entry.cycles ?? 0,
+    percent: percent(seen, total),
+  };
+}
+
+function pickCoveringQuestions(bank, length, testId) {
+  const take = Math.min(length, bank.length);
+  const byId = new Map(bank.map((question) => [question.id, question]));
+  const allIds = bank.map((question) => question.id);
+  const seen = new Set(coverageFor(testId, bank).seenIds);
+  const unseen = shuffle(allIds.filter((id) => !seen.has(id)));
+  let pickedIds;
+  if (unseen.length >= take) {
+    pickedIds = unseen.slice(0, take);
+  } else {
+    const refill = shuffle(allIds.filter((id) => seen.has(id)));
+    pickedIds = [...unseen, ...refill.slice(0, take - unseen.length)];
+  }
+  return shuffle(pickedIds.map((id) => byId.get(id)).filter(Boolean));
+}
+
+function markCovered(testId, bank, questionIds) {
+  const map = loadCoverageMap();
+  const entry = coverageFor(testId, bank);
+  const seen = new Set(entry.seenIds);
+  for (const id of questionIds) seen.add(id);
+  const allCovered = bank.every((question) => seen.has(question.id));
+  if (allCovered) {
+    entry.seenIds = [...questionIds];
+    entry.cycles = (entry.cycles ?? 0) + 1;
+  } else {
+    entry.seenIds = [...seen];
+  }
+  map.byTest[testId] = entry;
+  saveCoverageMap(map);
+}
+
 function startTest(testId) {
   const test = getTest(testId);
   const length = test.length ?? 36;
+  const bank = questionsForTest(test);
   state.test = test;
-  state.questions = shuffle(questionsForTest(test))
-    .slice(0, length)
-    .map((question) => {
-      const choices = question.choices.map((text, index) => ({
-        text,
-        correct: index === question.answer,
-      }));
-      return {
-        id: question.id,
-        prompt: question.prompt,
-        topic: question.topic,
-        choices: shuffle(choices),
-      };
-    });
+  state.questions = pickCoveringQuestions(bank, length, test.id).map((question) => {
+    const choices = question.choices.map((text, index) => ({
+      text,
+      correct: index === question.answer,
+    }));
+    return {
+      id: question.id,
+      prompt: question.prompt,
+      topic: question.topic,
+      choices: shuffle(choices),
+    };
+  });
   state.page = 0;
   state.answers = {};
   state.gradedPages = {};
@@ -165,6 +241,8 @@ function finishTest() {
     })),
   };
   saveAttempt(attempt);
+  const testId = attempt.testId;
+  markCovered(testId, questionsForTest(getTest(testId)), state.questions.map((question) => question.id));
   state.savedAttemptId = attempt.id;
   state.view = "results";
 }
@@ -300,19 +378,25 @@ function recentScoreBlurb() {
 function renderHome() {
   const available = tests();
   const history = loadHistory();
+  const bankSize = window.QUESTION_BANK.length;
   const testCards = available
     .map((test) => {
       const attempts = history.attempts.filter((attempt) => attempt.testId === test.id);
       const latest = attempts[0];
+      const bank = questionsForTest(test);
+      const coverage = coverageStats(test.id, bank);
       const latestLabel = latest
         ? `Last score ${latest.score} / ${latest.total} (${latest.percent}%)`
         : "No attempts yet";
+      const coverageLabel = coverage.remaining
+        ? `${coverage.remaining} of ${coverage.total} questions still unseen this cycle`
+        : `Full bank covered${coverage.cycles ? ` · ${coverage.cycles} cycle${coverage.cycles === 1 ? "" : "s"} complete` : ""}`;
       return `
         <article class="test-card">
           <div>
             <h3>${escapeHtml(test.name)}</h3>
             <p>${escapeHtml(test.description ?? "36 shuffled questions, 5 per page.")}</p>
-            <p class="hint">${escapeHtml(latestLabel)}</p>
+            <p class="hint">${escapeHtml(latestLabel)}. ${escapeHtml(coverageLabel)}.</p>
           </div>
           <button class="primary" data-start-test="${test.id}">Start test</button>
         </article>
@@ -327,12 +411,12 @@ function renderHome() {
         <h2 class="section-title">Practice Questions</h2>
         <div class="panel">
           <h2>Class C knowledge practice</h2>
-          <p class="lede">Each test uses 36 shuffled questions, 5 per page. Scores are saved on this device so you can track performance as more tests are added.</p>
+          <p class="lede">Each test uses 36 shuffled questions from a ${bankSize}-question bank, 5 per page. Unseen questions are drawn first so the whole set is covered before questions repeat.</p>
           ${recentScoreBlurb()}
           <div class="stats">
             <div class="stat"><b>36</b><span>questions per test</span></div>
             <div class="stat"><b>5</b><span>questions per page</span></div>
-            <div class="stat"><b>30</b><span>correct to pass</span></div>
+            <div class="stat"><b>${bankSize}</b><span>questions in the bank</span></div>
           </div>
           <div class="test-list">${testCards}</div>
           <div class="actions">
@@ -557,11 +641,26 @@ function renderScores() {
     )
     .join("");
 
+  const coverageRows = tests()
+    .map((test) => {
+      const coverage = coverageStats(test.id, questionsForTest(test));
+      return `
+        <div class="topic-row">
+          <div class="topic-label">
+            <span>${escapeHtml(test.name)}</span>
+            <strong>${coverage.seen} / ${coverage.total} seen (${coverage.remaining} left)</strong>
+          </div>
+          <div class="progress-bar"><span style="width:${coverage.percent}%"></span></div>
+        </div>
+      `;
+    })
+    .join("");
+
   return `
     <section>
       <h2 class="section-title">My scores</h2>
       <div class="panel">
-        <p class="lede">All completed tests on this browser are saved. When you add more practice tests, they will show up in the same history.</p>
+        <p class="lede">All completed tests on this browser are saved. Each new test prefers questions you have not seen yet so the full bank gets covered.</p>
         <div class="stats stats-4">
           <div class="stat"><b>${summary.totalAttempts}</b><span>tests taken</span></div>
           <div class="stat"><b>${summary.average}%</b><span>overall score</span></div>
@@ -585,6 +684,8 @@ function renderScores() {
             <tbody>${testRows}</tbody>
           </table>
         </div>
+        <h3>Question coverage</h3>
+        ${coverageRows}
         <h3>Weakest topics</h3>
         ${topicRows}
         <h3>All attempts</h3>

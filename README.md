@@ -6,10 +6,11 @@ Live: [https://yogesh2850.github.io/license_practice/](https://yogesh2850.github
 
 ## How it works
 
-- Each attempt shuffles **36 questions** from the current bank (100 to start).
+- Each attempt shuffles **36 questions** from the current bank (300 questions).
+- Unseen questions are drawn first so the full bank is covered before repeats.
 - Questions appear **5 per page**.
 - Submit a page to see that page’s score, then continue.
 - Passing target is **30 / 36**, matching the usual adult Class C knowledge test.
-- Finished tests are saved in the browser. Open **My scores** for overall average, pass rate, weakest topics, and every attempt.
+- Finished tests are saved in the browser. Open **My scores** for overall average, pass rate, weakest topics, coverage, and every attempt.
 
-Add more questions in `questions.js`, and extra tests in `window.TESTS`. Scores stay grouped by test name.
+Add more questions in `questions.js` (or `scripts/build_extra_questions.py`), and extra tests in `window.TESTS`. Scores stay grouped by test name.
