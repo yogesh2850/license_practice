@@ -764,15 +764,15 @@ function renderAttempt() {
 function illustration() {
   return `
     <svg viewBox="0 0 280 250" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <rect x="38" y="168" width="204" height="12" rx="3" fill="#d7e4f4"/>
-      <rect x="58" y="180" width="22" height="58" fill="#8fb4d9"/>
-      <rect x="200" y="180" width="22" height="58" fill="#8fb4d9"/>
-      <rect x="78" y="122" width="124" height="52" rx="8" fill="#5b9bd4"/>
-      <circle cx="140" cy="78" r="26" fill="#f0c090"/>
-      <path d="M118 68c10-18 34-16 44 4" stroke="#2c3f5c" stroke-width="9" stroke-linecap="round"/>
-      <rect x="112" y="136" width="56" height="48" rx="8" fill="#f0c090"/>
-      <rect x="96" y="148" width="88" height="40" rx="8" fill="#efc56b"/>
-      <rect x="118" y="158" width="44" height="26" rx="3" fill="#1b2a4a"/>
+      <rect x="38" y="168" width="204" height="12" rx="3" fill="#2a3344"/>
+      <rect x="58" y="180" width="22" height="58" fill="#6ea8ff"/>
+      <rect x="200" y="180" width="22" height="58" fill="#6ea8ff"/>
+      <rect x="78" y="122" width="124" height="52" rx="8" fill="#3d7ad6"/>
+      <circle cx="140" cy="78" r="26" fill="#f3c453"/>
+      <path d="M118 68c10-18 34-16 44 4" stroke="#f4f6fb" stroke-width="9" stroke-linecap="round"/>
+      <rect x="112" y="136" width="56" height="48" rx="8" fill="#f3c453"/>
+      <rect x="96" y="148" width="88" height="40" rx="8" fill="#ffd56a"/>
+      <rect x="118" y="158" width="44" height="26" rx="3" fill="#101218"/>
     </svg>
   `;
 }
