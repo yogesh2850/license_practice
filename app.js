@@ -1441,8 +1441,6 @@ function illustration() {
 
 function render() {
   const root = document.getElementById("app");
-  const who = document.getElementById("whoami");
-  if (who) who.textContent = currentDisplayName() || "Class C";
   if (state.view === "home") root.innerHTML = renderHome();
   if (state.view === "test") root.innerHTML = renderTest();
   if (state.view === "results") root.innerHTML = renderResults();
