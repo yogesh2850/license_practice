@@ -3306,7 +3306,7 @@ window.TESTS = [
   {
     id: "class-c-1",
     name: "Class C Practice Test 1",
-    description: "36 questions per attempt from a 300-question bank. Unseen questions are used first.",
+    description: "36 questions per attempt, 6 per page, from a 300-question bank. Unseen questions are used first.",
     length: 36,
     passScore: 30
   }

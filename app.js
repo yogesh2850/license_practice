@@ -1,4 +1,4 @@
-const QUESTIONS_PER_PAGE = 5;
+const QUESTIONS_PER_PAGE = 6;
 const STORAGE_KEY = "license_practice_history_v1";
 const COVERAGE_KEY = "license_practice_coverage_v1";
 
@@ -395,7 +395,7 @@ function renderHome() {
         <article class="test-card">
           <div>
             <h3>${escapeHtml(test.name)}</h3>
-            <p>${escapeHtml(test.description ?? "36 shuffled questions, 5 per page.")}</p>
+            <p>${escapeHtml(test.description ?? "36 shuffled questions, 6 per page.")}</p>
             <p class="hint">${escapeHtml(latestLabel)}. ${escapeHtml(coverageLabel)}.</p>
           </div>
           <button class="primary" data-start-test="${test.id}">Start test</button>
@@ -411,11 +411,11 @@ function renderHome() {
         <h2 class="section-title">Practice Questions</h2>
         <div class="panel">
           <h2>Class C knowledge practice</h2>
-          <p class="lede">Each test uses 36 shuffled questions from a ${bankSize}-question bank, 5 per page. Unseen questions are drawn first so the whole set is covered before questions repeat.</p>
+          <p class="lede">Each test uses 36 shuffled questions from a ${bankSize}-question bank, 6 per page. After you submit a page you see how many you got right and wrong, then continue. Unseen questions are drawn first so the whole set is covered before questions repeat.</p>
           ${recentScoreBlurb()}
           <div class="stats">
             <div class="stat"><b>36</b><span>questions per test</span></div>
-            <div class="stat"><b>5</b><span>questions per page</span></div>
+            <div class="stat"><b>6</b><span>questions per page</span></div>
             <div class="stat"><b>${bankSize}</b><span>questions in the bank</span></div>
           </div>
           <div class="test-list">${testCards}</div>
@@ -487,8 +487,16 @@ function renderTest() {
     ? ""
     : `<p class="hint">${pageFullyAnswered() ? "All questions on this page are answered." : "All questions must be answered before submitting."}</p>`;
 
+  const wrongCount = graded ? questions.length - pageScore : 0;
   const scoreBox = graded
-    ? `<div class="page-score">Page score: ${pageScore} / ${questions.length}. Running total: ${running} / ${answeredSoFar}.</div>`
+    ? `<div class="page-score">
+         <div class="page-score-grid">
+           <div class="stat"><b class="ok">${pageScore}</b><span>right</span></div>
+           <div class="stat"><b class="bad">${wrongCount}</b><span>wrong</span></div>
+           <div class="stat"><b>${running} / ${answeredSoFar}</b><span>running total</span></div>
+         </div>
+         <p>This page: ${pageScore} right, ${wrongCount} wrong out of ${questions.length}.</p>
+       </div>`
     : "";
 
   const action = graded

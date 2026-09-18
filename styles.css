@@ -221,6 +221,18 @@ h1 {
   font-size: 1.3rem;
 }
 
+.stat b.ok {
+  color: var(--ok);
+}
+
+.stat b.bad {
+  color: var(--bad);
+}
+
+.stat b.bad {
+  color: var(--bad);
+}
+
 .stat span {
   font-size: 0.78rem;
   color: var(--muted);
@@ -362,6 +374,16 @@ button,
   background: var(--cream);
   border-left: 4px solid var(--gold);
   font-weight: 600;
+}
+
+.page-score p {
+  margin: 0.75rem 0 0;
+}
+
+.page-score-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.7rem;
 }
 
 .results-banner {
@@ -508,6 +530,7 @@ footer {
 
   .stats,
   .stats-4,
+  .page-score-grid,
   .test-card {
     grid-template-columns: 1fr;
   }

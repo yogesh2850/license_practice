@@ -8,7 +8,7 @@ Live: [https://yogesh2850.github.io/license_practice/](https://yogesh2850.github
 
 - Each attempt shuffles **36 questions** from the current bank (300 questions).
 - Unseen questions are drawn first so the full bank is covered before repeats.
-- Questions appear **5 per page**.
+- Questions appear **6 per page**. Each page shows how many you got right and wrong before you continue.
 - Submit a page to see that page’s score, then continue.
 - Passing target is **30 / 36**, matching the usual adult Class C knowledge test.
 - Finished tests are saved in the browser. Open **My scores** for overall average, pass rate, weakest topics, coverage, and every attempt.
