@@ -1,14 +1,41 @@
 const QUESTIONS_PER_PAGE = 5;
-const TEST_LENGTH = 36;
-const PASS_SCORE = 30;
+const STORAGE_KEY = "license_practice_history_v1";
 
 const state = {
   view: "home",
+  test: null,
   questions: [],
   page: 0,
   answers: {},
   gradedPages: {},
+  startedAt: null,
+  savedAttemptId: null,
+  selectedAttemptId: null,
 };
+
+function tests() {
+  return window.TESTS ?? [
+    {
+      id: "class-c-1",
+      name: "Class C Practice Test 1",
+      length: 36,
+      passScore: 30,
+    },
+  ];
+}
+
+function getTest(testId) {
+  return tests().find((item) => item.id === testId) ?? tests()[0];
+}
+
+function questionsForTest(test) {
+  if (Array.isArray(test.questions) && test.questions.length) return test.questions;
+  if (Array.isArray(test.questionIds) && test.questionIds.length) {
+    const byId = new Map(window.QUESTION_BANK.map((question) => [question.id, question]));
+    return test.questionIds.map((id) => byId.get(id)).filter(Boolean);
+  }
+  return window.QUESTION_BANK;
+}
 
 function shuffle(list) {
   const items = [...list];
@@ -19,9 +46,33 @@ function shuffle(list) {
   return items;
 }
 
-function startTest() {
-  state.questions = shuffle(window.QUESTION_BANK)
-    .slice(0, TEST_LENGTH)
+function loadHistory() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "");
+    if (parsed && Array.isArray(parsed.attempts)) return parsed;
+  } catch {
+    // Ignore malformed local data and start a fresh history.
+  }
+  return { attempts: [] };
+}
+
+function saveHistory(history) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(history));
+}
+
+function saveAttempt(attempt) {
+  const history = loadHistory();
+  history.attempts.unshift(attempt);
+  saveHistory(history);
+  return attempt;
+}
+
+function startTest(testId) {
+  const test = getTest(testId);
+  const length = test.length ?? 36;
+  state.test = test;
+  state.questions = shuffle(questionsForTest(test))
+    .slice(0, length)
     .map((question) => {
       const choices = question.choices.map((text, index) => ({
         text,
@@ -37,6 +88,8 @@ function startTest() {
   state.page = 0;
   state.answers = {};
   state.gradedPages = {};
+  state.startedAt = new Date().toISOString();
+  state.savedAttemptId = null;
   state.view = "test";
   render();
 }
@@ -75,8 +128,8 @@ function totalScore() {
   return scoreRange(gradedQuestions);
 }
 
-function answeredCount() {
-  return Object.keys(state.answers).length;
+function passScore() {
+  return state.test?.passScore ?? 30;
 }
 
 function gradePage() {
@@ -85,9 +138,40 @@ function gradePage() {
   render();
 }
 
+function finishTest() {
+  if (state.savedAttemptId) {
+    state.view = "results";
+    return;
+  }
+  const score = scoreRange(state.questions);
+  const total = state.questions.length;
+  const attempt = {
+    id: crypto.randomUUID(),
+    testId: state.test?.id ?? "class-c-1",
+    testName: state.test?.name ?? "Class C Practice Test 1",
+    startedAt: state.startedAt,
+    finishedAt: new Date().toISOString(),
+    score,
+    total,
+    passed: score >= passScore(),
+    percent: total ? Math.round((score / total) * 100) : 0,
+    results: state.questions.map((question) => ({
+      id: question.id,
+      topic: question.topic,
+      correct: scoreQuestion(question),
+      prompt: question.prompt,
+      selected: question.choices[state.answers[question.id]]?.text ?? "",
+      answer: question.choices.find((choice) => choice.correct)?.text ?? "",
+    })),
+  };
+  saveAttempt(attempt);
+  state.savedAttemptId = attempt.id;
+  state.view = "results";
+}
+
 function nextPage() {
   if (state.page + 1 >= pageCount()) {
-    state.view = "results";
+    finishTest();
   } else {
     state.page += 1;
   }
@@ -108,6 +192,35 @@ function selectAnswer(questionId, choiceIndex) {
   }
 }
 
+function testInProgress() {
+  return state.questions.length > 0 && !state.savedAttemptId;
+}
+
+function goHome() {
+  state.view = "home";
+  render();
+}
+
+function goScores() {
+  state.selectedAttemptId = null;
+  state.view = "scores";
+  render();
+}
+
+function showAttempt(attemptId) {
+  state.selectedAttemptId = attemptId;
+  state.view = "attempt";
+  render();
+}
+
+function clearHistory() {
+  if (!window.confirm("Clear all saved test scores on this device?")) return;
+  saveHistory({ attempts: [] });
+  state.selectedAttemptId = null;
+  state.view = "scores";
+  render();
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -116,22 +229,115 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;");
 }
 
+function formatDate(iso) {
+  if (!iso) return "Unknown date";
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(iso));
+}
+
+function percent(score, total) {
+  return total ? Math.round((score / total) * 100) : 0;
+}
+
+function summarizeHistory(attempts) {
+  const totalAttempts = attempts.length;
+  const passes = attempts.filter((attempt) => attempt.passed).length;
+  const points = attempts.reduce((sum, attempt) => sum + attempt.score, 0);
+  const possible = attempts.reduce((sum, attempt) => sum + attempt.total, 0);
+  const best = attempts.reduce((top, attempt) => Math.max(top, attempt.percent), 0);
+  const latest = attempts[0] ?? null;
+  const byTest = {};
+  for (const attempt of attempts) {
+    if (!byTest[attempt.testId]) {
+      byTest[attempt.testId] = {
+        testId: attempt.testId,
+        testName: attempt.testName,
+        attempts: 0,
+        passes: 0,
+        points: 0,
+        possible: 0,
+        best: 0,
+      };
+    }
+    const group = byTest[attempt.testId];
+    group.attempts += 1;
+    group.passes += attempt.passed ? 1 : 0;
+    group.points += attempt.score;
+    group.possible += attempt.total;
+    group.best = Math.max(group.best, attempt.percent);
+  }
+  const topics = {};
+  for (const attempt of attempts) {
+    for (const result of attempt.results ?? []) {
+      if (!topics[result.topic]) topics[result.topic] = { topic: result.topic, correct: 0, total: 0 };
+      topics[result.topic].total += 1;
+      if (result.correct) topics[result.topic].correct += 1;
+    }
+  }
+  const topicList = Object.values(topics)
+    .map((topic) => ({ ...topic, percent: percent(topic.correct, topic.total) }))
+    .sort((a, b) => a.percent - b.percent);
+  return {
+    totalAttempts,
+    passes,
+    passRate: percent(passes, totalAttempts),
+    average: percent(points, possible),
+    best,
+    latest,
+    byTest: Object.values(byTest),
+    topics: topicList,
+  };
+}
+
+function recentScoreBlurb() {
+  const latest = loadHistory().attempts[0];
+  if (!latest) return "";
+  return `<p class="lede">Last attempt: <strong>${latest.score} / ${latest.total}</strong> (${latest.percent}%) on ${escapeHtml(latest.testName)} — ${latest.passed ? "pass" : "did not pass"}.</p>`;
+}
+
 function renderHome() {
+  const available = tests();
+  const history = loadHistory();
+  const testCards = available
+    .map((test) => {
+      const attempts = history.attempts.filter((attempt) => attempt.testId === test.id);
+      const latest = attempts[0];
+      const latestLabel = latest
+        ? `Last score ${latest.score} / ${latest.total} (${latest.percent}%)`
+        : "No attempts yet";
+      return `
+        <article class="test-card">
+          <div>
+            <h3>${escapeHtml(test.name)}</h3>
+            <p>${escapeHtml(test.description ?? "36 shuffled questions, 5 per page.")}</p>
+            <p class="hint">${escapeHtml(latestLabel)}</p>
+          </div>
+          <button class="primary" data-start-test="${test.id}">Start test</button>
+        </article>
+      `;
+    })
+    .join("");
+
   return `
     <section class="hero">
       <div class="art">${illustration()}</div>
       <div>
-        <h2 class="lede-title" style="font-family:'Source Serif 4',Georgia,serif;font-size:2rem;font-weight:500;margin:0 0 0.8rem;">Practice Questions</h2>
+        <h2 class="section-title">Practice Questions</h2>
         <div class="panel">
           <h2>Class C knowledge practice</h2>
-          <p class="lede">This unofficial practice test uses the same rhythm as the California sample tests: answer a short set, check your work, then continue. Each attempt draws 36 shuffled questions from a ${window.QUESTION_BANK.length}-question bank.</p>
+          <p class="lede">Each test uses 36 shuffled questions, 5 per page. Scores are saved on this device so you can track performance as more tests are added.</p>
+          ${recentScoreBlurb()}
           <div class="stats">
             <div class="stat"><b>36</b><span>questions per test</span></div>
             <div class="stat"><b>5</b><span>questions per page</span></div>
             <div class="stat"><b>30</b><span>correct to pass</span></div>
           </div>
+          <div class="test-list">${testCards}</div>
           <div class="actions">
-            <button class="primary" id="start-btn">Start shuffled test</button>
+            <button class="ghost js-scores" type="button">View my scores</button>
+            ${testInProgress() ? `<button class="ghost" id="resume-btn">Resume current test</button>` : ""}
           </div>
         </div>
       </div>
@@ -171,7 +377,8 @@ function renderTest() {
   const questions = pageQuestions();
   const start = state.page * QUESTIONS_PER_PAGE + 1;
   const end = start + questions.length - 1;
-  const rangeLabel = start === end ? `Question ${start} of ${TEST_LENGTH}` : `Questions ${start}–${end} of ${TEST_LENGTH}`;
+  const total = state.questions.length;
+  const rangeLabel = start === end ? `Question ${start} of ${total}` : `Questions ${start}–${end} of ${total}`;
   const graded = Boolean(state.gradedPages[state.page]);
   const pageScore = graded ? scoreRange(questions) : null;
   const running = graded ? totalScore() : scoreRange(state.questions.slice(0, start - 1));
@@ -206,7 +413,7 @@ function renderTest() {
 
   return `
     <section>
-      <h2 style="font-family:'Source Serif 4',Georgia,serif;font-size:2rem;font-weight:500;margin:0 0 0.8rem;">Practice Questions ${state.page + 1} of ${pageCount()}</h2>
+      <h2 class="section-title">${escapeHtml(state.test?.name ?? "Practice Questions")} · Page ${state.page + 1} of ${pageCount()}</h2>
       <div class="panel">
           <div class="progress">
             <span>${rangeLabel}</span>
@@ -225,9 +432,11 @@ function renderTest() {
 
 function renderResults() {
   const score = scoreRange(state.questions);
-  const passed = score >= PASS_SCORE;
-  const percent = Math.round((score / TEST_LENGTH) * 100);
+  const total = state.questions.length;
+  const passed = score >= passScore();
+  const pct = percent(score, total);
   const missed = state.questions.filter((question) => !scoreQuestion(question));
+  const history = summarizeHistory(loadHistory().attempts);
 
   const missedMarkup = missed.length
     ? missed
@@ -249,19 +458,194 @@ function renderResults() {
     <section class="hero">
       <div class="art">${illustration()}</div>
       <div>
-        <h2 style="font-family:'Source Serif 4',Georgia,serif;font-size:2rem;font-weight:500;margin:0 0 0.8rem;">Your score</h2>
+        <h2 class="section-title">Your score</h2>
         <div class="panel">
           <div class="results-banner ${passed ? "pass" : "fail"}">
-            <strong>${passed ? "Pass" : "Did not pass"}</strong> — ${score} / ${TEST_LENGTH} (${percent}%). The official Class C knowledge test generally requires ${PASS_SCORE} correct answers.
+            <strong>${passed ? "Pass" : "Did not pass"}</strong> — ${score} / ${total} (${pct}%). Saved to your score history on this device.
           </div>
-          <p class="lede">This was a shuffled 36-question practice test. Take another attempt to draw a new mix from the question bank.</p>
+          <div class="stats">
+            <div class="stat"><b>${history.totalAttempts}</b><span>tests recorded</span></div>
+            <div class="stat"><b>${history.average}%</b><span>overall average</span></div>
+            <div class="stat"><b>${history.passRate}%</b><span>pass rate</span></div>
+          </div>
           <div class="missed">
             <h3>Review missed questions</h3>
             ${missedMarkup}
           </div>
           <div class="actions">
-            <button class="primary" id="retry-btn">Take another shuffled test</button>
+            <button class="primary" data-start-test="${state.test?.id ?? "class-c-1"}">Take another shuffled test</button>
+            <button class="ghost js-scores" type="button">View all scores</button>
           </div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderScores() {
+  const attempts = loadHistory().attempts;
+  const summary = summarizeHistory(attempts);
+  if (!attempts.length) {
+    return `
+      <section>
+        <h2 class="section-title">My scores</h2>
+        <div class="panel">
+          <p class="lede">No tests recorded yet. Finish a practice test and it will appear here, including later tests you add.</p>
+          <div class="actions">
+            <button class="primary js-home" type="button">Back to tests</button>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  const trend = [...attempts].slice(0, 12).reverse();
+  const maxBar = Math.max(100, ...trend.map((attempt) => attempt.percent));
+  const trendMarkup = trend
+    .map(
+      (attempt) => `
+        <div class="trend-col" title="${escapeHtml(attempt.testName)}: ${attempt.percent}%">
+          <span class="trend-bar ${attempt.passed ? "pass" : "fail"}" style="height:${Math.max(8, (attempt.percent / maxBar) * 100)}%"></span>
+          <span>${attempt.percent}%</span>
+        </div>
+      `,
+    )
+    .join("");
+
+  const testRows = summary.byTest
+    .map(
+      (group) => `
+        <tr>
+          <td>${escapeHtml(group.testName)}</td>
+          <td>${group.attempts}</td>
+          <td>${percent(group.points, group.possible)}%</td>
+          <td>${percent(group.passes, group.attempts)}%</td>
+          <td>${group.best}%</td>
+        </tr>
+      `,
+    )
+    .join("");
+
+  const topicRows = summary.topics.length
+    ? summary.topics
+        .map(
+          (topic) => `
+            <div class="topic-row">
+              <div class="topic-label">
+                <span>${escapeHtml(topic.topic)}</span>
+                <strong>${topic.correct} / ${topic.total} (${topic.percent}%)</strong>
+              </div>
+              <div class="progress-bar"><span style="width:${topic.percent}%"></span></div>
+            </div>
+          `,
+        )
+        .join("")
+    : "<p class='hint'>Topic breakdown will appear after you complete a test.</p>";
+
+  const attemptRows = attempts
+    .map(
+      (attempt) => `
+        <tr>
+          <td>${escapeHtml(formatDate(attempt.finishedAt))}</td>
+          <td>${escapeHtml(attempt.testName)}</td>
+          <td>${attempt.score} / ${attempt.total}</td>
+          <td>${attempt.percent}%</td>
+          <td><span class="pill ${attempt.passed ? "pass" : "fail"}">${attempt.passed ? "Pass" : "Did not pass"}</span></td>
+          <td><button class="linkish" data-view-attempt="${attempt.id}">Details</button></td>
+        </tr>
+      `,
+    )
+    .join("");
+
+  return `
+    <section>
+      <h2 class="section-title">My scores</h2>
+      <div class="panel">
+        <p class="lede">All completed tests on this browser are saved. When you add more practice tests, they will show up in the same history.</p>
+        <div class="stats stats-4">
+          <div class="stat"><b>${summary.totalAttempts}</b><span>tests taken</span></div>
+          <div class="stat"><b>${summary.average}%</b><span>overall score</span></div>
+          <div class="stat"><b>${summary.passRate}%</b><span>pass rate</span></div>
+          <div class="stat"><b>${summary.best}%</b><span>best score</span></div>
+        </div>
+        <h3>Recent trend</h3>
+        <div class="trend">${trendMarkup}</div>
+        <h3>By test</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Test</th>
+                <th>Attempts</th>
+                <th>Average</th>
+                <th>Pass rate</th>
+                <th>Best</th>
+              </tr>
+            </thead>
+            <tbody>${testRows}</tbody>
+          </table>
+        </div>
+        <h3>Weakest topics</h3>
+        ${topicRows}
+        <h3>All attempts</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Test</th>
+                <th>Score</th>
+                <th>%</th>
+                <th>Result</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>${attemptRows}</tbody>
+          </table>
+        </div>
+        <div class="actions">
+          <button class="primary js-home" type="button">Back to tests</button>
+          <button class="ghost" id="clear-history">Clear history</button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderAttempt() {
+  const attempt = loadHistory().attempts.find((item) => item.id === state.selectedAttemptId);
+  if (!attempt) {
+    return renderScores();
+  }
+  const missed = (attempt.results ?? []).filter((result) => !result.correct);
+  const missedMarkup = missed.length
+    ? missed
+        .map(
+          (result, index) => `
+            <div class="missed-item">
+              <p><strong>${index + 1}. ${escapeHtml(result.prompt)}</strong></p>
+              <p>Your answer: ${escapeHtml(result.selected || "No answer")}</p>
+              <p>Correct answer: ${escapeHtml(result.answer)}</p>
+            </div>
+          `,
+        )
+        .join("")
+    : "<p>You missed none of the questions on this attempt.</p>";
+
+  return `
+    <section>
+      <h2 class="section-title">${escapeHtml(attempt.testName)}</h2>
+      <div class="panel">
+        <div class="results-banner ${attempt.passed ? "pass" : "fail"}">
+          <strong>${attempt.passed ? "Pass" : "Did not pass"}</strong> — ${attempt.score} / ${attempt.total} (${attempt.percent}%) on ${escapeHtml(formatDate(attempt.finishedAt))}.
+        </div>
+        <div class="missed">
+          <h3>Missed questions</h3>
+          ${missedMarkup}
+        </div>
+        <div class="actions">
+          <button class="primary js-scores" type="button">Back to scores</button>
+          <button class="ghost" data-start-test="${attempt.testId}">Retake this test</button>
         </div>
       </div>
     </section>
@@ -289,14 +673,35 @@ function render() {
   if (state.view === "home") root.innerHTML = renderHome();
   if (state.view === "test") root.innerHTML = renderTest();
   if (state.view === "results") root.innerHTML = renderResults();
+  if (state.view === "scores") root.innerHTML = renderScores();
+  if (state.view === "attempt") root.innerHTML = renderAttempt();
 }
 
 document.addEventListener("click", (event) => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
-  if (target.id === "start-btn" || target.id === "retry-btn") startTest();
+  if (target.closest("[data-go-home]") || target.closest(".js-home")) {
+    event.preventDefault();
+    goHome();
+    return;
+  }
+  if (target.closest(".js-scores")) {
+    event.preventDefault();
+    goScores();
+    return;
+  }
+  if (target.id === "resume-btn") {
+    state.view = "test";
+    render();
+    return;
+  }
   if (target.id === "grade-btn") gradePage();
   if (target.id === "next-btn") nextPage();
+  if (target.id === "clear-history") clearHistory();
+  const startId = target.getAttribute("data-start-test");
+  if (startId) startTest(startId);
+  const attemptId = target.getAttribute("data-view-attempt");
+  if (attemptId) showAttempt(attemptId);
 });
 
 document.addEventListener("change", (event) => {

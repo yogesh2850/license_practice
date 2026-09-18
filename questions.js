@@ -1100,3 +1100,13 @@ window.QUESTION_BANK = [
     answer: 0
   }
 ];
+
+window.TESTS = [
+  {
+    id: "class-c-1",
+    name: "Class C Practice Test 1",
+    description: "Shuffled 36-question Class C knowledge practice.",
+    length: 36,
+    passScore: 30
+  }
+];

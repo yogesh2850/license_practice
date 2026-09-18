@@ -18,7 +18,7 @@
   </head>
   <body>
     <header class="topbar">
-      <a class="brand" href="./">
+      <a class="brand" href="./" data-go-home>
         <svg class="brand-mark" viewBox="0 0 48 48" aria-hidden="true">
           <circle cx="24" cy="24" r="24" fill="#f4c542" />
           <path d="M10 28c8-14 20-14 28 0" stroke="#1b2a4a" stroke-width="3" fill="none" />
@@ -29,11 +29,12 @@
           <span>Driver License Knowledge Test</span>
         </span>
       </a>
+      <button class="top-link js-scores" type="button">My scores</button>
     </header>
     <div class="nav">
-      <span>Practice Tests</span>
+      <button class="nav-link js-home" type="button">Practice Tests</button>
       <span>Class C</span>
-      <span>Shuffled 36-question exam</span>
+      <button class="nav-link js-scores" type="button">My scores</button>
     </div>
     <main class="wrap">
       <div class="crumbs">

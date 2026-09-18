@@ -10,5 +10,6 @@ Live: [https://yogesh2850.github.io/license_practice/](https://yogesh2850.github
 - Questions appear **5 per page**.
 - Submit a page to see that page’s score, then continue.
 - Passing target is **30 / 36**, matching the usual adult Class C knowledge test.
+- Finished tests are saved in the browser. Open **My scores** for overall average, pass rate, weakest topics, and every attempt.
 
-Add more questions in `questions.js`.
+Add more questions in `questions.js`, and extra tests in `window.TESTS`. Scores stay grouped by test name.
