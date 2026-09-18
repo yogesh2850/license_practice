@@ -87,6 +87,7 @@ body {
   display: flex;
   gap: 1.5rem;
   align-items: center;
+  flex-wrap: wrap;
   font-weight: 600;
   color: var(--text);
 }
@@ -525,6 +526,46 @@ button,
   margin: 0.2rem 0;
 }
 
+.fact-group {
+  margin-top: 1.35rem;
+}
+
+.fact-group h3 {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: baseline;
+  margin: 0;
+  color: var(--gold);
+}
+
+.fact-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.85rem 1.25rem;
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--line);
+  align-items: center;
+}
+
+.fact-row p {
+  margin: 0;
+  flex: 1 1 auto;
+}
+
+.fact-answer {
+  flex: 0 0 auto;
+  color: var(--gold);
+  font-weight: 700;
+  text-align: center;
+  white-space: nowrap;
+  background: rgba(243, 196, 83, 0.12);
+  border: 1px solid rgba(243, 196, 83, 0.35);
+  border-radius: 999px;
+  padding: 0.28rem 0.75rem;
+}
+
 .panel h3 {
   margin: 1.25rem 0 0.6rem;
   font-size: 1.05rem;
@@ -644,6 +685,16 @@ footer {
   .test-card {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .fact-row {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .fact-answer {
+    text-align: center;
+    white-space: normal;
   }
 
   .nav {

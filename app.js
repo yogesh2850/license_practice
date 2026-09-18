@@ -272,8 +272,160 @@ function unfinishedSummary() {
     pages: pageCount(),
     remaining: Math.max(0, state.questions.length - answered),
     total: state.questions.length,
-    review: state.mode === "review",
+    kind: state.mode === "review" ? "review" : state.mode === "facts" ? "fact practice" : "test",
   };
+}
+
+function isMeasurementAnswer(text) {
+  const value = String(text ?? "");
+  return (
+    /\d+\s*(–|-)?\s*\d*\s*(mph|feet|ft|inches?|seconds?|days?|hours?|years?|months?|pounds?|points?|miles?)|\d+\s*%|\$\s*[\d,]+|0\.\d+\s*%|one-tenth|one-third|one-quarter|one mile|one year|three seconds|two seconds|five seconds|one month|six months|\bhalf\b|\d+\s*(mph|feet)/i.test(
+      value,
+    ) || /^\d+$/.test(value.trim())
+  );
+}
+
+function isFactQuestion(question) {
+  const correct = question.choices[question.answer] ?? "";
+  if (!isMeasurementAnswer(correct)) return false;
+  if (/^911$|^sr\s*1$/i.test(String(correct).trim())) return false;
+  const measuredChoices = question.choices.filter((choice) => isMeasurementAnswer(choice)).length;
+  return measuredChoices >= 2;
+}
+
+function factGroup(question) {
+  const answer = question.choices[question.answer] ?? "";
+  const blob = `${question.prompt} ${answer}`;
+  if (/BAC|0\.\d+\s*%/i.test(blob)) return "Alcohol and BAC";
+  if (/\$|points/i.test(answer)) return "Fines, points, and other numbers";
+  if (
+    /mph|speed limit|wet road|packed snow|on ice|visibility|school zone|alley|highway|trailer|residential|blind intersection|NEV|slow-moving|streetcar/i.test(
+      blob,
+    ) && /mph|\bhalf\b|one-quarter/i.test(answer)
+  ) {
+    return "Speed limits and conditions";
+  }
+  if (/feet|inches|mile/i.test(answer)) return "Distances";
+  if (/second|day|hour|year|month|following.distance|scan the road/i.test(blob)) {
+    return "Time and following distance";
+  }
+  return "Other numbers";
+}
+
+function distinctiveWords(prompt) {
+  const stop = new Set([
+    "the",
+    "and",
+    "for",
+    "you",
+    "may",
+    "not",
+    "are",
+    "was",
+    "but",
+    "can",
+    "how",
+    "has",
+    "had",
+    "its",
+    "our",
+    "any",
+    "all",
+    "that",
+    "this",
+    "with",
+    "from",
+    "your",
+    "have",
+    "should",
+    "generally",
+    "approximately",
+    "about",
+    "unless",
+    "otherwise",
+    "posted",
+    "normal",
+    "normally",
+    "recommended",
+    "minimum",
+    "maximum",
+    "ideal",
+    "must",
+    "when",
+    "while",
+    "into",
+    "than",
+    "more",
+    "speed",
+    "limit",
+    "driver",
+    "vehicle",
+    "california",
+    "highway",
+    "highways",
+    "traffic",
+  ]);
+  return [
+    ...new Set(
+      String(prompt)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, " ")
+        .split(" ")
+        .filter((word) => word.length > 2 && !stop.has(word)),
+    ),
+  ];
+}
+
+function factFingerprint(question) {
+  return {
+    answer: String(question.choices[question.answer] ?? "")
+      .toLowerCase()
+      .replace(/[^a-z0-9%]+/g, ""),
+    words: distinctiveWords(question.prompt),
+  };
+}
+
+function uniqueFactQuestions() {
+  const facts = (window.QUESTION_BANK ?? []).filter(isFactQuestion).sort((a, b) => a.id - b.id);
+  const wordCounts = {};
+  for (const question of facts) {
+    for (const word of distinctiveWords(question.prompt)) {
+      wordCounts[word] = (wordCounts[word] ?? 0) + 1;
+    }
+  }
+  const kept = [];
+  for (const question of facts) {
+    const next = factFingerprint(question);
+    const duplicate = kept.some((existing) => {
+      const prev = factFingerprint(existing);
+      if (prev.answer !== next.answer) return false;
+      const [shorter, longer] =
+        next.words.length <= prev.words.length ? [next.words, prev.words] : [prev.words, next.words];
+      if (shorter.length >= 2) {
+        const contained = shorter.filter((word) => longer.includes(word)).length;
+        if (contained / shorter.length >= 0.8) return true;
+      }
+      const shared = next.words.filter((word) => prev.words.includes(word));
+      return shared.some((word) => (wordCounts[word] ?? 0) <= 3);
+    });
+    if (!duplicate) kept.push(question);
+  }
+  return kept;
+}
+
+function toPracticeQuestions(bankQuestions) {
+  return bankQuestions.map((question) => {
+    const choices = question.choices.map((text, index) => ({
+      text,
+      correct: index === question.answer,
+    }));
+    return {
+      id: question.id,
+      prompt: question.prompt,
+      topic: question.topic,
+      choices: shuffle(choices),
+    };
+  });
 }
 
 function coverageFor(testId, bank) {
@@ -448,6 +600,41 @@ function startMissedReview() {
   );
 }
 
+function confirmReplaceUnfinished(message) {
+  if (!testInProgress()) return true;
+  return window.confirm(message);
+}
+
+function startFactPractice() {
+  if (!requireName()) return;
+  if (testInProgress() && state.mode !== "facts") {
+    const replace = confirmReplaceUnfinished(
+      "Start fact practice? This replaces your unfinished test. Tap Continue or Restart this test instead if you want to keep those remaining questions.",
+    );
+    if (!replace) {
+      state.view = "home";
+      render();
+      return;
+    }
+  }
+  const questions = toPracticeQuestions(shuffle(uniqueFactQuestions()));
+  if (!questions.length) {
+    state.view = "facts";
+    render();
+    return;
+  }
+  beginQuestionSet(
+    {
+      id: "fact-review",
+      name: "Fact questions",
+      length: questions.length,
+      passScore: Math.ceil(questions.length * 0.8),
+    },
+    questions,
+    "facts",
+  );
+}
+
 function pageCount() {
   return Math.ceil(state.questions.length / QUESTIONS_PER_PAGE);
 }
@@ -527,7 +714,7 @@ function finishTest() {
   };
   saveAttempt(attempt);
   rememberMissed(attempt.results);
-  if (state.mode !== "review") {
+  if (state.mode === "test") {
     const testId = attempt.testId;
     markCovered(testId, questionsForTest(getTest(testId)), state.questions.map((question) => question.id));
   }
@@ -572,6 +759,11 @@ function goHome() {
 
 function goMissed() {
   state.view = "missed";
+  render();
+}
+
+function goFacts() {
+  state.view = "facts";
   render();
 }
 
@@ -725,7 +917,7 @@ function renderUnfinishedBanner() {
   if (!unfinished) return "";
   return `
     <div class="unfinished">
-      <p><strong>Unfinished ${unfinished.review ? "review" : "test"} saved</strong> — ${escapeHtml(unfinished.name)}. Page ${unfinished.page} of ${unfinished.pages}. ${unfinished.remaining} question${unfinished.remaining === 1 ? "" : "s"} still remaining.</p>
+      <p><strong>Unfinished ${unfinished.kind} saved</strong> — ${escapeHtml(unfinished.name)}. Page ${unfinished.page} of ${unfinished.pages}. ${unfinished.remaining} question${unfinished.remaining === 1 ? "" : "s"} still remaining.</p>
       <div class="actions">
         <button class="primary" id="resume-btn" type="button">Continue</button>
         <button class="ghost" id="restart-unfinished" type="button">Restart this test</button>
@@ -782,6 +974,7 @@ function renderHome() {
           <div class="test-list">${testCards}</div>
           <div class="actions">
             <button class="ghost js-scores" type="button">View my scores</button>
+            <button class="ghost js-facts" type="button">Fact questions (${uniqueFactQuestions().length})</button>
             <button class="ghost js-missed" type="button">Missed questions (${missedList().length})</button>
           </div>
         </div>
@@ -1170,6 +1363,66 @@ function renderMissed() {
   `;
 }
 
+function renderFacts() {
+  const facts = uniqueFactQuestions();
+  const groups = {};
+  for (const question of facts) {
+    const group = factGroup(question);
+    if (!groups[group]) groups[group] = [];
+    groups[group].push(question);
+  }
+  const groupOrder = [
+    "Speed limits and conditions",
+    "Distances",
+    "Time and following distance",
+    "Alcohol and BAC",
+    "Fines, points, and other numbers",
+    "Other numbers",
+  ];
+  const groupMarkup = groupOrder
+    .filter((name) => groups[name]?.length)
+    .map((name) => {
+      const rows = groups[name]
+        .map(
+          (question) => `
+            <div class="fact-row">
+              <p>${escapeHtml(question.prompt)}</p>
+              <p class="fact-answer">${escapeHtml(question.choices[question.answer])}</p>
+            </div>
+          `,
+        )
+        .join("");
+      return `
+        <div class="fact-group">
+          <h3>${escapeHtml(name)} <span class="hint">${groups[name].length}</span></h3>
+          ${rows}
+        </div>
+      `;
+    })
+    .join("");
+
+  return `
+    <section>
+      <h2 class="section-title">Fact Questions</h2>
+      <div class="panel">
+        <p class="lede">Numbers that show up on the knowledge test: speed limits, distances, time limits, BAC, and similar facts. Read them here, or practice just this set.</p>
+        <div class="stats">
+          <div class="stat"><b>${facts.length}</b><span>number facts</span></div>
+          <div class="stat"><b>${Object.keys(groups).length}</b><span>groups</span></div>
+          <div class="stat"><b>6</b><span>per practice page</span></div>
+        </div>
+        <div class="actions">
+          <button class="primary" id="practice-facts" type="button">Practice fact questions</button>
+        </div>
+        ${groupMarkup}
+        <div class="actions">
+          <button class="ghost js-home" type="button">Back to tests</button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
 function illustration() {
   return `
     <svg viewBox="0 0 280 250" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -1196,6 +1449,7 @@ function render() {
   if (state.view === "scores") root.innerHTML = renderScores();
   if (state.view === "attempt") root.innerHTML = renderAttempt();
   if (state.view === "missed") root.innerHTML = renderMissed();
+  if (state.view === "facts") root.innerHTML = renderFacts();
 }
 
 document.addEventListener("click", (event) => {
@@ -1209,6 +1463,11 @@ document.addEventListener("click", (event) => {
   if (target.closest(".js-scores")) {
     event.preventDefault();
     goScores();
+    return;
+  }
+  if (target.closest(".js-facts")) {
+    event.preventDefault();
+    goFacts();
     return;
   }
   if (target.closest(".js-missed")) {
@@ -1226,6 +1485,10 @@ document.addEventListener("click", (event) => {
   }
   if (target.id === "practice-missed") {
     startMissedReview();
+    return;
+  }
+  if (target.id === "practice-facts") {
+    startFactPractice();
     return;
   }
   if (target.id === "grade-btn") gradePage();

@@ -14,5 +14,6 @@ Live: [https://yogesh2850.github.io/license_practice/](https://yogesh2850.github
 - Enter your **name** first so scores, unfinished tests, and missed questions stay attached to you. If that name already has history, the site welcomes you back.
 - If you leave a test unfinished, **Continue** picks up the same remaining questions. **Restart this test** starts that same 36-question set over from page 1 instead of throwing the rest away.
 - Wrong answers are kept on **Missed questions** so you can read the correct answer later or practice just those items.
+- **Fact Questions** collects the number facts (speed limits, distances, BAC, time limits) so you can read them or practice that set.
 
 Add more questions in `questions.js` (or `scripts/build_extra_questions.py`), and extra tests in `window.TESTS`. Scores stay grouped by test name.
