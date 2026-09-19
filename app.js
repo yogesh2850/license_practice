@@ -1,7 +1,9 @@
 const QUESTIONS_PER_PAGE = 6;
 const PROFILE_KEY = "license_practice_profiles_v1";
+const SESSION_KEY = "license_practice_session_v1";
 const LEGACY_HISTORY_KEY = "license_practice_history_v1";
 const LEGACY_COVERAGE_KEY = "license_practice_coverage_v1";
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const state = {
   view: "home",
@@ -15,6 +17,10 @@ const state = {
   selectedAttemptId: null,
   mode: "test",
   nameError: "",
+  token: "",
+  cloud: false,
+  authBusy: false,
+  authEmail: "",
 };
 
 function tests() {
@@ -50,16 +56,17 @@ function shuffle(list) {
   return items;
 }
 
-function nameKey(name) {
-  return String(name ?? "")
+function emailKey(email) {
+  return String(email ?? "")
     .trim()
-    .replace(/\s+/g, " ")
     .toLowerCase();
 }
 
-function emptyProfile(displayName) {
+function emptyProfile(email) {
+  const key = emailKey(email);
   return {
-    name: displayName,
+    name: key,
+    email: key,
     attempts: [],
     coverage: { byTest: {} },
     missed: {},
@@ -103,42 +110,250 @@ function migrateLegacyInto(profile) {
 function currentProfile() {
   const store = loadStore();
   if (!store.currentKey || !store.profiles[store.currentKey]) return null;
-  return store.profiles[store.currentKey];
+  const profile = store.profiles[store.currentKey];
+  const email = emailKey(profile.email || profile.name || store.currentKey);
+  if (!EMAIL_RE.test(email)) return null;
+  return profile;
 }
 
 function currentDisplayName() {
-  return currentProfile()?.name ?? "";
+  return currentProfile()?.email || currentProfile()?.name || "";
 }
 
-function knownProfiles() {
-  const store = loadStore();
-  return Object.entries(store.profiles).map(([key, profile]) => ({
-    key,
-    name: profile.name,
-    attempts: profile.attempts?.length ?? 0,
-  }));
+function apiUrl(path) {
+  const configured = String(window.APP_CONFIG?.apiUrl ?? "").replace(/\/$/, "");
+  if (configured) return `${configured}/api${path}`;
+  return new URL(`api${path}`, window.location.href).href;
 }
 
-function setCurrentName(rawName) {
-  const displayName = String(rawName ?? "").trim().replace(/\s+/g, " ");
-  const key = nameKey(displayName);
-  if (!key) {
-    state.nameError = "Enter your name so we can save your tests.";
-    return false;
+async function api(path, { method = "GET", body, token } = {}) {
+  const headers = { accept: "application/json" };
+  if (body !== undefined) headers["content-type"] = "application/json";
+  const session = token ?? state.token;
+  if (session) headers.authorization = `Bearer ${session}`;
+  const response = await fetch(apiUrl(path), {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  let data = {};
+  try {
+    data = await response.json();
+  } catch {
+    data = {};
   }
+  if (!response.ok) {
+    throw new Error(data.error || "Request failed.");
+  }
+  return data;
+}
+
+async function probeCloud() {
+  try {
+    const response = await fetch(apiUrl("/health"), { signal: AbortSignal.timeout(2500) });
+    state.cloud = response.ok;
+  } catch {
+    state.cloud = false;
+  }
+  return state.cloud;
+}
+
+function saveSession(token, email) {
+  state.token = token || "";
+  if (!token) {
+    localStorage.removeItem(SESSION_KEY);
+    return;
+  }
+  localStorage.setItem(SESSION_KEY, JSON.stringify({ token, email }));
+}
+
+let syncTimer = 0;
+function queueCloudSync() {
+  if (!state.token || !state.cloud) return;
+  window.clearTimeout(syncTimer);
+  syncTimer = window.setTimeout(() => {
+    pushProfile().catch(() => {});
+  }, 400);
+}
+
+async function pushProfile() {
+  const profile = currentProfile();
+  if (!profile || !state.token) return;
+  await api("/profile", {
+    method: "PUT",
+    body: {
+      attempts: profile.attempts ?? [],
+      coverage: profile.coverage ?? { byTest: {} },
+      missed: profile.missed ?? {},
+      inProgress: profile.inProgress ?? null,
+    },
+  });
+}
+
+function applyProfile(email, profile) {
+  const key = emailKey(email);
   const store = loadStore();
-  const existed = Boolean(store.profiles[key]);
-  if (!store.profiles[key]) {
-    store.profiles[key] = emptyProfile(displayName);
-    migrateLegacyInto(store.profiles[key]);
-  } else {
-    store.profiles[key].name = displayName;
-  }
+  store.profiles[key] = {
+    ...emptyProfile(key),
+    ...profile,
+    name: key,
+    email: key,
+  };
   store.currentKey = key;
   saveStore(store);
-  state.nameError = "";
   restoreInProgress();
-  return { existed, name: displayName };
+}
+
+function takeLegacyLocalData() {
+  const store = loadStore();
+  const current = store.profiles[store.currentKey];
+  if (current && (current.attempts?.length || Object.keys(current.missed ?? {}).length || current.inProgress)) {
+    return {
+      attempts: current.attempts ?? [],
+      coverage: current.coverage ?? { byTest: {} },
+      missed: current.missed ?? {},
+      inProgress: current.inProgress ?? null,
+    };
+  }
+  const first = Object.values(store.profiles)[0];
+  if (!first) return null;
+  if (!(first.attempts?.length || Object.keys(first.missed ?? {}).length || first.inProgress)) return null;
+  return {
+    attempts: first.attempts ?? [],
+    coverage: first.coverage ?? { byTest: {} },
+    missed: first.missed ?? {},
+    inProgress: first.inProgress ?? null,
+  };
+}
+
+async function bufToB64(buffer) {
+  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function b64ToBuf(value) {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+async function hashPassword(password, saltB64) {
+  const salt = saltB64 ? b64ToBuf(saltB64) : crypto.getRandomValues(new Uint8Array(16));
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" },
+    key,
+    256,
+  );
+  return { hash: await bufToB64(bits), salt: await bufToB64(salt) };
+}
+
+async function signupOrLogin(rawEmail, password, mode) {
+  const email = emailKey(rawEmail);
+  state.authEmail = email;
+  if (!EMAIL_RE.test(email)) {
+    state.nameError = "Enter a valid email address.";
+    return false;
+  }
+  if (String(password ?? "").length < 6) {
+    state.nameError = "Password must be at least 6 characters.";
+    return false;
+  }
+  state.authBusy = true;
+  state.nameError = "";
+  render();
+  try {
+    const cloud = await probeCloud();
+    if (cloud) {
+      const data = await api(mode === "signup" ? "/signup" : "/login", {
+        method: "POST",
+        body: { email, password },
+      });
+      saveSession(data.token, email);
+      let profile = data.profile ?? emptyProfile(email);
+      if (mode === "signup") {
+        const legacy = takeLegacyLocalData();
+        if (legacy && !(profile.attempts?.length)) {
+          profile = { ...profile, ...legacy, email, name: email };
+          applyProfile(email, profile);
+          await pushProfile();
+        } else {
+          applyProfile(email, profile);
+        }
+      } else {
+        applyProfile(email, profile);
+      }
+      state.nameError = "";
+      return { existed: mode === "login", name: email };
+    }
+
+    const store = loadStore();
+    const existing = store.profiles[email];
+    if (mode === "signup") {
+      if (existing?.passwordHash) {
+        state.nameError = "That email already has an account. Log in instead.";
+        return false;
+      }
+      const secret = await hashPassword(password);
+      const legacy = existing && !existing.passwordHash ? existing : takeLegacyLocalData();
+      store.profiles[email] = {
+        ...emptyProfile(email),
+        ...(legacy || {}),
+        email,
+        name: email,
+        passwordHash: secret.hash,
+        passwordSalt: secret.salt,
+      };
+    } else {
+      if (!existing?.passwordHash) {
+        state.nameError = "No account for that email. Create an account first.";
+        return false;
+      }
+      const secret = await hashPassword(password, existing.passwordSalt);
+      if (secret.hash !== existing.passwordHash) {
+        state.nameError = "Email or password is incorrect.";
+        return false;
+      }
+    }
+    store.currentKey = email;
+    saveStore(store);
+    saveSession("", email);
+    restoreInProgress();
+    state.nameError = "";
+    return { existed: mode === "login", name: email };
+  } catch (error) {
+    state.nameError = error.message || "Could not log in.";
+    return false;
+  } finally {
+    state.authBusy = false;
+  }
+}
+
+async function logout() {
+  if (state.token) {
+    try {
+      await api("/logout", { method: "POST" });
+    } catch {
+      // Ignore network errors on logout.
+    }
+  }
+  saveSession("", "");
+  const store = loadStore();
+  store.currentKey = "";
+  saveStore(store);
+  state.questions = [];
+  state.test = null;
+  state.page = 0;
+  state.answers = {};
+  state.gradedPages = {};
+  state.startedAt = null;
+  state.savedAttemptId = null;
+  state.mode = "test";
+  state.view = "home";
+  render();
 }
 
 function withProfile(mutator) {
@@ -147,6 +362,7 @@ function withProfile(mutator) {
   if (!key || !store.profiles[key]) return null;
   const result = mutator(store.profiles[key], store);
   saveStore(store);
+  queueCloudSync();
   return result;
 }
 
@@ -492,7 +708,7 @@ function markCovered(testId, bank, questionIds) {
 
 function requireName() {
   if (currentDisplayName()) return true;
-  state.nameError = "Enter your name first so we can save this test to you.";
+  state.nameError = "Log in with your email first so we can save this test to you.";
   state.view = "home";
   render();
   return false;
@@ -767,15 +983,13 @@ function goFacts() {
   render();
 }
 
-function saveNameFromForm() {
-  const input = document.getElementById("name-input");
-  const result = setCurrentName(input?.value ?? "");
-  if (!result) {
+function saveAuthFromForm(intent) {
+  const email = document.getElementById("email-input")?.value ?? "";
+  const password = document.getElementById("password-input")?.value ?? "";
+  signupOrLogin(email, password, intent === "signup" ? "signup" : "login").then((result) => {
     render();
-    document.getElementById("name-input")?.focus();
-    return;
-  }
-  render();
+    if (!result) document.getElementById("email-input")?.focus();
+  });
 }
 
 function goScores() {
@@ -791,7 +1005,7 @@ function showAttempt(attemptId) {
 }
 
 function clearHistory() {
-  if (!window.confirm("Clear all saved test scores on this device?")) return;
+  if (!window.confirm("Clear all saved test scores for this account?")) return;
   saveHistory({ attempts: [] });
   state.selectedAttemptId = null;
   state.view = "scores";
@@ -882,32 +1096,34 @@ function recentScoreBlurb() {
   return `<p class="lede">Welcome back, <strong>${escapeHtml(name)}</strong>. You've taken this test before. Last attempt: <strong>${latest.score} / ${latest.total}</strong> (${latest.percent}%) on ${escapeHtml(latest.testName)} — ${latest.passed ? "pass" : "did not pass"}${missedCount ? `. ${missedCount} missed question${missedCount === 1 ? "" : "s"} saved for review` : ""}.</p>`;
 }
 
-function renderNameForm() {
-  const name = currentDisplayName();
-  const others = knownProfiles().filter((profile) => nameKey(profile.name) !== nameKey(name));
-  const otherMarkup = others.length
-    ? `<p class="hint">Switch to someone who already tested:</p>
-       <div class="name-chips">${others
-         .map(
-           (profile) =>
-             `<button type="button" class="ghost" data-switch-name="${escapeHtml(profile.name)}">${escapeHtml(profile.name)} (${profile.attempts})</button>`,
-         )
-         .join("")}</div>`
-    : "";
-  return `
-    <form class="name-form" id="name-form">
-      <label for="name-input">Your name</label>
-      <div class="name-row">
-        <input id="name-input" name="name" autocomplete="name" placeholder="e.g. Alex" value="${escapeHtml(name)}" />
-        <button class="primary" type="submit">${name ? "Update" : "Save name"}</button>
+function renderAuthForm() {
+  const email = currentDisplayName();
+  const cloudLabel = state.cloud
+    ? "Saved to the shared database, so you can log in on another phone or computer."
+    : "The shared database isn't connected from this page, so this account stays on this device.";
+  if (email) {
+    return `
+      <div class="name-form">
+        <p class="lede" style="margin-bottom:0.6rem">Logged in as <strong>${escapeHtml(email)}</strong></p>
+        <p class="hint">${cloudLabel}</p>
+        <div class="actions">
+          <button class="ghost js-logout" type="button">Log out</button>
+        </div>
       </div>
+    `;
+  }
+  return `
+    <form class="name-form" id="auth-form">
+      <label for="email-input">Email</label>
+      <input id="email-input" name="email" type="email" autocomplete="email" placeholder="you@email.com" value="${escapeHtml(state.authEmail)}" />
+      <label for="password-input">Password</label>
+      <input id="password-input" name="password" type="password" autocomplete="current-password" placeholder="at least 6 characters" />
       ${state.nameError ? `<p class="feedback bad">${escapeHtml(state.nameError)}</p>` : ""}
-      ${
-        name
-          ? `<p class="hint">We'll keep your unfinished tests, scores, and missed questions under this name.</p>`
-          : `<p class="hint">Enter your name so we can tell if you have taken this test before.</p>`
-      }
-      ${otherMarkup}
+      <p class="hint">Log in with your email to see your scores, unfinished tests, and missed questions. Create an account if this is your first time.</p>
+      <div class="name-row">
+        <button class="primary" name="intent" value="login" type="submit" ${state.authBusy ? "disabled" : ""}>Log in</button>
+        <button class="ghost" name="intent" value="signup" type="submit" ${state.authBusy ? "disabled" : ""}>Create account</button>
+      </div>
     </form>
   `;
 }
@@ -962,7 +1178,7 @@ function renderHome() {
         <h2 class="section-title">Practice Questions</h2>
         <div class="panel">
           <h2>Class C knowledge practice</h2>
-          ${renderNameForm()}
+          ${renderAuthForm()}
           <p class="lede">Each test uses 36 shuffled questions from a ${bankSize}-question bank, 6 per page. After you submit a page you see how many you got right and wrong, then continue. Unseen questions are drawn first so the whole set is covered before questions repeat.</p>
           ${recentScoreBlurb()}
           ${renderUnfinishedBanner()}
@@ -1224,7 +1440,7 @@ function renderScores() {
     <section>
       <h2 class="section-title">My scores</h2>
       <div class="panel">
-        <p class="lede">${currentDisplayName() ? `Scores for <strong>${escapeHtml(currentDisplayName())}</strong>. ` : ""}All completed tests on this browser are saved. Each new test prefers questions you have not seen yet so the full bank gets covered.</p>
+        <p class="lede">${currentDisplayName() ? `Scores for <strong>${escapeHtml(currentDisplayName())}</strong>. ` : ""}All completed tests for this account are saved. Each new test prefers questions you have not seen yet so the full bank gets covered.</p>
         <div class="stats stats-4">
           <div class="stat"><b>${summary.totalAttempts}</b><span>tests taken</span></div>
           <div class="stat"><b>${summary.average}%</b><span>overall score</span></div>
@@ -1441,6 +1657,8 @@ function illustration() {
 
 function render() {
   const root = document.getElementById("app");
+  const logoutBtn = document.querySelector(".top-link.js-logout");
+  if (logoutBtn) logoutBtn.hidden = !currentDisplayName();
   if (state.view === "home") root.innerHTML = renderHome();
   if (state.view === "test") root.innerHTML = renderTest();
   if (state.view === "results") root.innerHTML = renderResults();
@@ -1473,6 +1691,11 @@ document.addEventListener("click", (event) => {
     goMissed();
     return;
   }
+  if (target.closest(".js-logout")) {
+    event.preventDefault();
+    logout();
+    return;
+  }
   if (target.id === "resume-btn") {
     resumeTest();
     return;
@@ -1492,12 +1715,6 @@ document.addEventListener("click", (event) => {
   if (target.id === "grade-btn") gradePage();
   if (target.id === "next-btn") nextPage();
   if (target.id === "clear-history") clearHistory();
-  const switchName = target.getAttribute("data-switch-name");
-  if (switchName) {
-    setCurrentName(switchName);
-    render();
-    return;
-  }
   const startId = target.getAttribute("data-start-test");
   if (startId) startTest(startId, { forceNew: target.hasAttribute("data-start-new") });
   const attemptId = target.getAttribute("data-view-attempt");
@@ -1511,9 +1728,11 @@ document.addEventListener("click", (event) => {
 
 document.addEventListener("submit", (event) => {
   const form = event.target;
-  if (!(form instanceof HTMLFormElement) || form.id !== "name-form") return;
+  if (!(form instanceof HTMLFormElement) || form.id !== "auth-form") return;
   event.preventDefault();
-  saveNameFromForm();
+  const submitter = event.submitter;
+  const intent = submitter instanceof HTMLButtonElement ? submitter.value : "login";
+  saveAuthFromForm(intent);
 });
 
 document.addEventListener("change", (event) => {
@@ -1523,5 +1742,28 @@ document.addEventListener("change", (event) => {
   selectAnswer(questionId, Number(target.value));
 });
 
-restoreInProgress();
-render();
+async function restoreSession() {
+  await probeCloud();
+  let saved = null;
+  try {
+    saved = JSON.parse(localStorage.getItem(SESSION_KEY) ?? "");
+  } catch {
+    saved = null;
+  }
+  if (state.cloud && saved?.token) {
+    state.token = saved.token;
+    try {
+      const data = await api("/profile");
+      applyProfile(data.profile?.email || saved.email, data.profile);
+      return;
+    } catch {
+      saveSession("", "");
+    }
+  }
+  restoreInProgress();
+}
+
+restoreSession().finally(() => {
+  restoreInProgress();
+  render();
+});

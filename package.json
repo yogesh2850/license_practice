@@ -1,0 +1,8 @@
+{
+  "name": "license-practice",
+  "private": true,
+  "description": "California Class C practice test with email accounts and SQLite storage",
+  "scripts": {
+    "start": "node server/index.mjs"
+  }
+}
