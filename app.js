@@ -85,7 +85,11 @@ function loadStore() {
 }
 
 function saveStore(store) {
-  localStorage.setItem(PROFILE_KEY, JSON.stringify(store));
+  try {
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(store));
+  } catch (error) {
+    throw new Error("This browser blocked saving your account. Turn off private mode and try again.");
+  }
 }
 
 function migrateLegacyInto(profile) {
@@ -150,8 +154,16 @@ async function api(path, { method = "GET", body, token } = {}) {
 
 async function probeCloud() {
   try {
-    const response = await fetch(apiUrl("/health"), { signal: AbortSignal.timeout(2500) });
-    state.cloud = response.ok;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 1500);
+    const response = await fetch(apiUrl("/health"), { signal: controller.signal });
+    window.clearTimeout(timer);
+    if (!response.ok) {
+      state.cloud = false;
+      return false;
+    }
+    const data = await response.json();
+    state.cloud = data?.ok === true;
   } catch {
     state.cloud = false;
   }
@@ -264,7 +276,12 @@ async function signupOrLogin(rawEmail, password, mode) {
   }
   state.authBusy = true;
   state.nameError = "";
-  render();
+  const signupBtn = document.getElementById("signup-btn");
+  const loginBtn = document.getElementById("login-btn");
+  if (signupBtn) signupBtn.disabled = true;
+  if (loginBtn) loginBtn.disabled = true;
+  if (mode === "signup" && signupBtn) signupBtn.textContent = "Creating account…";
+  if (mode === "login" && loginBtn) loginBtn.textContent = "Logging in…";
   try {
     const cloud = await probeCloud();
     if (cloud) {
@@ -325,7 +342,12 @@ async function signupOrLogin(rawEmail, password, mode) {
     state.nameError = "";
     return { existed: mode === "login", name: email };
   } catch (error) {
-    state.nameError = error.message || "Could not log in.";
+    const message = String(error?.message || error || "");
+    if (/quota|storage/i.test(message)) {
+      state.nameError = "This browser blocked saving your account. Turn off private mode and try again.";
+    } else {
+      state.nameError = message || "Could not create the account. Try Create account again.";
+    }
     return false;
   } finally {
     state.authBusy = false;
@@ -988,7 +1010,7 @@ function saveAuthFromForm(intent) {
   const password = document.getElementById("password-input")?.value ?? "";
   signupOrLogin(email, password, intent === "signup" ? "signup" : "login").then((result) => {
     render();
-    if (!result) document.getElementById("email-input")?.focus();
+    if (!result) document.getElementById(password ? "password-input" : "email-input")?.focus();
   });
 }
 
@@ -1113,16 +1135,16 @@ function renderAuthForm() {
     `;
   }
   return `
-    <form class="name-form" id="auth-form">
+    <form class="name-form" id="auth-form" novalidate>
       <label for="email-input">Email</label>
       <input id="email-input" name="email" type="email" autocomplete="email" placeholder="you@email.com" value="${escapeHtml(state.authEmail)}" />
       <label for="password-input">Password</label>
-      <input id="password-input" name="password" type="password" autocomplete="current-password" placeholder="at least 6 characters" />
+      <input id="password-input" name="password" type="password" autocomplete="new-password" placeholder="at least 6 characters" minlength="6" />
       ${state.nameError ? `<p class="feedback bad">${escapeHtml(state.nameError)}</p>` : ""}
       <p class="hint">Log in with your email to see your scores, unfinished tests, and missed questions. Create an account if this is your first time.</p>
       <div class="name-row">
-        <button class="primary" name="intent" value="login" type="submit" ${state.authBusy ? "disabled" : ""}>Log in</button>
-        <button class="ghost" name="intent" value="signup" type="submit" ${state.authBusy ? "disabled" : ""}>Create account</button>
+        <button class="ghost" id="login-btn" data-auth="login" type="button" ${state.authBusy ? "disabled" : ""}>Log in</button>
+        <button class="primary" id="signup-btn" data-auth="signup" type="button" ${state.authBusy ? "disabled" : ""}>Create account</button>
       </div>
     </form>
   `;
@@ -1696,6 +1718,12 @@ document.addEventListener("click", (event) => {
     logout();
     return;
   }
+  const authIntent = target.closest("[data-auth]");
+  if (authIntent) {
+    event.preventDefault();
+    saveAuthFromForm(authIntent.getAttribute("data-auth"));
+    return;
+  }
   if (target.id === "resume-btn") {
     resumeTest();
     return;
@@ -1730,9 +1758,7 @@ document.addEventListener("submit", (event) => {
   const form = event.target;
   if (!(form instanceof HTMLFormElement) || form.id !== "auth-form") return;
   event.preventDefault();
-  const submitter = event.submitter;
-  const intent = submitter instanceof HTMLButtonElement ? submitter.value : "login";
-  saveAuthFromForm(intent);
+  saveAuthFromForm("login");
 });
 
 document.addEventListener("change", (event) => {
@@ -1763,6 +1789,7 @@ async function restoreSession() {
   restoreInProgress();
 }
 
+render();
 restoreSession().finally(() => {
   restoreInProgress();
   render();

@@ -240,6 +240,10 @@ h1 {
   flex-wrap: wrap;
 }
 
+.name-row button {
+  flex: 1 1 140px;
+}
+
 .name-row input {
   flex: 1 1 180px;
   min-width: 0;
